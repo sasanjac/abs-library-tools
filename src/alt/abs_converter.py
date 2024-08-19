@@ -9,6 +9,7 @@ import pathlib
 
 import attrs
 import ffmpeg
+import loguru
 
 MAX_BITRATE = 192000
 
@@ -42,6 +43,21 @@ class ABSConverter:
             output_directory_path.mkdir(parents=True, exist_ok=True)
             output_file_path = output_directory_path / "audiobook.m4b"
             process_file = self.input_directory_path / "input"
+            chapter_file = self.input_directory_path / "FFMETADATAFILE"
+            chapter_str = ";FFMETADATA1\n"
+            start = 0
+            for file in input_files:
+                probe = ffmpeg.probe(file)
+                length = int(probe["streams"][0]["duration"] * 1000)
+                end = start + length
+                chapter_str += f"[CHAPTER]\nTIMEBASE=1/1000\nSTART={start:.0f}\nEND={end:.0f}\ntitle={file.stem}\n"
+                start = end + 1
+
+            loguru.logger.info(chapter_str)
+
+            with chapter_file.open(mode="w") as chapter_list:
+                chapter_list.write(chapter_str)
+
             with process_file.open(mode="w") as input_list:
                 input_list.write("\n".join(f"file '{file!s}'" for file in input_files))
 
@@ -62,6 +78,14 @@ class ABSConverter:
                     "0",
                     "-i",
                     str(process_file),
+                    "-i",
+                    str(chapter_file),
+                    "-map",
+                    "0",
+                    "-map_metadata",
+                    "1",
+                    "-c:v",
+                    "copy",
                     "-c:a",
                     "libfdk_aac",
                     "-vbr",
@@ -78,6 +102,12 @@ class ABSConverter:
                     "0",
                     "-i",
                     str(process_file),
+                    "-i",
+                    str(chapter_file),
+                    "-map",
+                    "0",
+                    "-map_metadata",
+                    "1",
                     "-c",
                     "copy",
                     str(output_file_path),
