@@ -118,6 +118,12 @@ class ABSConverter:
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await process.communicate()
+            if stdout:
+                loguru.logger.info(stdout.decode())
+                
+            if stderr:
+                loguru.logger.info(stderr.decode())
+                
             for file in self.input_directory_path.iterdir():
                 if file.is_file():
                     file.unlink()
