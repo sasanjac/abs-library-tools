@@ -63,10 +63,11 @@ class ABSConverter:
                 input_list.write("\n".join(f"file '{file!s}'" for file in input_files))
 
             probe = ffmpeg.probe(input_files[0])
-            if probe["nb_streams"] != EXPECTED_STREAM_COUNT:
+            n_streams = probe["format"]["nb_streams"]
+            if n_streams != EXPECTED_STREAM_COUNT:
                 loguru.logger.error(
                     "Expected 2 streams, got {n_streams}.",
-                    n_streams=probe["nb_streams"],
+                    n_streams=n_streams,
                 )
 
             stream_cover = next(stream["index"] for stream in probe["streams"] if stream["codec"] == "mjpeg")
