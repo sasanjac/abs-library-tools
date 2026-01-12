@@ -48,7 +48,7 @@ class ABSConverter:
             start = 0
             for file in input_files:
                 probe = ffmpeg.probe(file)
-                length = int(probe["streams"][0]["duration"] * 1000)
+                length = int(probe["streams"][0]["duration"]) * 1000
                 end = start + length
                 chapter_str += f"[CHAPTER]\nTIMEBASE=1/1000\nSTART={start:.0f}\nEND={end:.0f}\ntitle={file.stem}\n"
                 start = end + 1
