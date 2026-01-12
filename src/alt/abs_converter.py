@@ -12,6 +12,7 @@ import ffmpeg
 import loguru
 
 MAX_BITRATE = 192000
+EXPECTED_STREAM_COUNT = 2
 
 SUPPORTED_FORMATS = [
     ".flac",
@@ -61,11 +62,20 @@ class ABSConverter:
             with process_file.open(mode="w") as input_list:
                 input_list.write("\n".join(f"file '{file!s}'" for file in input_files))
 
+            probe = ffmpeg.probe(input_files[0])
+            if probe["nb_streams"] != EXPECTED_STREAM_COUNT:
+                loguru.logger.error(
+                    "Expected 2 streams, got {n_streams}.",
+                    n_streams=probe["nb_streams"],
+                )
+
+            stream_cover = next(stream["index"] for stream in probe["streams"] if stream["codec"] == "mjpeg")
+            stream_audio = (stream_cover + 1) % 2
+
             _format = input_files[0].suffix
             if _format in [".flac", ".wav"]:
                 convert = True
             else:
-                probe = ffmpeg.probe(input_files[0])
                 bitrate = probe["streams"][0]["bit_rate"]
                 convert = bitrate > MAX_BITRATE
 
@@ -81,9 +91,9 @@ class ABSConverter:
                     "-i",
                     str(chapter_file),
                     "-map",
-                    "0",
+                    f"{stream_cover}",
                     "-map_metadata",
-                    "1",
+                    f"{stream_audio}",
                     "-c:v",
                     "copy",
                     "-c:a",
@@ -105,13 +115,14 @@ class ABSConverter:
                     "-i",
                     str(chapter_file),
                     "-map",
-                    "0",
+                    f"{stream_cover}",
                     "-map_metadata",
-                    "1",
+                    f"{stream_audio}",
                     "-c",
                     "copy",
                     str(output_file_path),
                 ]
+
             process = await asyncio.create_subprocess_exec(
                 *args,
                 stdout=asyncio.subprocess.PIPE,
@@ -120,10 +131,10 @@ class ABSConverter:
             stdout, stderr = await process.communicate()
             if stdout:
                 loguru.logger.info(stdout.decode())
-                
+
             if stderr:
                 loguru.logger.info(stderr.decode())
-                
-            for file in self.input_directory_path.iterdir():
-                if file.is_file():
-                    file.unlink()
+            else:
+                for file in self.input_directory_path.iterdir():
+                    if file.is_file():
+                        file.unlink()
