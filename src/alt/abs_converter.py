@@ -70,7 +70,7 @@ class ABSConverter:
                     n_streams=n_streams,
                 )
 
-            stream_cover = next(stream["index"] for stream in probe["streams"] if stream["codec"] == "mjpeg")
+            stream_cover = next(stream["index"] for stream in probe["streams"] if stream["codec_name"] == "mjpeg")
             stream_audio = (stream_cover + 1) % 2
 
             _format = input_files[0].suffix
