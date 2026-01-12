@@ -62,25 +62,18 @@ class ABSConverter:
             with process_file.open(mode="w") as input_list:
                 input_list.write("\n".join(f"file '{file!s}'" for file in input_files))
 
-            probe = ffmpeg.probe(input_files[0])
-            n_streams = probe["format"]["nb_streams"]
-            if n_streams != EXPECTED_STREAM_COUNT:
-                loguru.logger.error(
-                    "Expected 2 streams, got {n_streams}.",
-                    n_streams=n_streams,
-                )
-
-            stream_cover = next(stream["index"] for stream in probe["streams"] if stream["codec_name"] == "mjpeg")
-            stream_audio = (stream_cover + 1) % 2
-
             _format = input_files[0].suffix
             if _format in [".flac", ".wav"]:
                 convert = True
             else:
+                probe = ffmpeg.probe(input_files[0])
                 bitrate = probe["streams"][0]["bit_rate"]
                 convert = bitrate > MAX_BITRATE
 
             if convert:
+                loguru.logger.info(
+                    "Converting audio to AAC format to file {output_file_path}", output_file_path=output_file_path
+                )
                 args = [
                     "ffmpeg",
                     "-f",
@@ -92,15 +85,19 @@ class ABSConverter:
                     "-i",
                     str(chapter_file),
                     "-map",
-                    f"{stream_cover}",
+                    "0:a",
+                    "-map",
+                    "0:v?",
                     "-map_metadata",
-                    f"{stream_audio}",
-                    "-c:v",
-                    "copy",
+                    "1",
                     "-c:a",
                     "libfdk_aac",
                     "-vbr",
                     "5",
+                    "-c:v",
+                    "copy",
+                    "-disposition:v",
+                    "attached_pic",
                     str(output_file_path),
                 ]
 
@@ -116,11 +113,17 @@ class ABSConverter:
                     "-i",
                     str(chapter_file),
                     "-map",
-                    f"{stream_cover}",
+                    "0:a",
+                    "-map",
+                    "0:v?",
                     "-map_metadata",
-                    f"{stream_audio}",
-                    "-c",
+                    "1",
+                    "-c:a",
                     "copy",
+                    "-c:v",
+                    "copy",
+                    "-disposition:v",
+                    "attached_pic",
                     str(output_file_path),
                 ]
 
