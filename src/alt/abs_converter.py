@@ -63,7 +63,7 @@ class ABSConverter:
                 input_list.write("\n".join(f"file '{file!s}'" for file in input_files))
 
             _format = input_files[0].suffix
-            if _format in [".flac", ".wav"]:
+            if _format in [".flac", ".wav", ".mp3"]:
                 convert = True
             else:
                 probe = ffmpeg.probe(input_files[0])
