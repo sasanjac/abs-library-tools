@@ -72,7 +72,8 @@ class ABSConverter:
 
             if convert:
                 loguru.logger.info(
-                    "Converting audio to AAC format to file {output_file_path}", output_file_path=output_file_path
+                    "Converting audio to AAC format to file {output_file_path}",
+                    output_file_path=output_file_path,
                 )
                 args = [
                     "ffmpeg",
@@ -138,7 +139,7 @@ class ABSConverter:
 
             if stderr:
                 loguru.logger.info(stderr.decode())
-            else:
-                for file in self.input_directory_path.iterdir():
-                    if file.is_file():
-                        file.unlink()
+
+            for file in self.input_directory_path.iterdir():
+                if file.is_file():
+                    file.unlink()
