@@ -67,7 +67,7 @@ class ABSConverter:
                 convert = True
             else:
                 probe = ffmpeg.probe(input_files[0])
-                bitrate = probe["streams"][0]["bit_rate"]
+                bitrate = int(probe["streams"][0]["bit_rate"])
                 convert = bitrate > MAX_BITRATE
 
             if convert:
