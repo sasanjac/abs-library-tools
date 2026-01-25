@@ -64,13 +64,13 @@ class ABSConverter:
 
             _format = input_files[0].suffix
             if _format in [".flac", ".wav", ".mp3"]:
-                convert = True
+                needs_conversion = True
             else:
                 probe = ffmpeg.probe(input_files[0])
                 bitrate = int(probe["streams"][0]["bit_rate"])
-                convert = bitrate > MAX_BITRATE
+                needs_conversion = bitrate > MAX_BITRATE
 
-            if convert:
+            if needs_conversion:
                 loguru.logger.info(
                     "Converting audio to AAC format to file {output_file_path}",
                     output_file_path=output_file_path,
