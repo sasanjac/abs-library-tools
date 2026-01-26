@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import pathlib
+import re
 
 import attrs
 import ffmpeg
@@ -13,6 +14,11 @@ import loguru
 
 MAX_BITRATE = 192000
 EXPECTED_STREAM_COUNT = 2
+CHAPTER_LENGTH_TOLERANCE_MS = 5000
+
+M4B_COPY_PARAMS = ["-c:a", "copy", "-c:v", "copy", "-disposition:v", "attached_pic"]
+M4B_CONVERT_PARAMS = ["-c:a", "libfdk_aac", "-vbr", "5", "-c:v", "copy", "-disposition:v", "attached_pic"]
+MP3_COPY_PARAMS = ["-c:a", "copy", "-c:v", "copy", "-id3v2_version", "3"]
 
 SUPPORTED_FORMATS = [
     ".flac",
@@ -23,11 +29,183 @@ SUPPORTED_FORMATS = [
     ".m4a",
 ]
 
+CHAPTER_FILE_NAME = "audiobook.chapters.txt"
+TIMESTAMP_PATTERN = re.compile(r"^(\d+):(\d{2}):(\d{2})(?:\.(\d+))?\s+(.+)$")
+TOTAL_LENGTH_PATTERN = re.compile(r"^#\s*total-length\s+(\d+):(\d{2}):(\d{2})(?:\.(\d+))?")
+
+
+def _parse_timestamp_to_ms(hours: str, minutes: str, seconds: str, fraction: str | None) -> int:
+    """Convert timestamp components to milliseconds."""
+    ms = int(hours) * 3600000 + int(minutes) * 60000 + int(seconds) * 1000
+    if fraction:
+        ms += int(fraction.ljust(3, "0")[:3])
+
+    return ms
+
+
+@attrs.define(auto_attribs=True, kw_only=True, slots=False)
+class ChapterInfo:
+    start_ms: int
+    title: str
+
+
+@attrs.define(auto_attribs=True, kw_only=True, slots=False)
+class ExternalChapters:
+    total_length_ms: int
+    chapters: list[ChapterInfo]
+
+
+@attrs.define(auto_attribs=True, kw_only=True, slots=False)
+class EncodingSettings:
+    output_suffix: str
+    codec_args: list[str]
+    log_message: str
+
 
 @attrs.define(auto_attribs=True, kw_only=True, slots=False)
 class ABSConverter:
     input_directory_path: pathlib.Path
     export_directory_path: pathlib.Path
+
+    def _get_encoding_settings(
+        self,
+        file_format: str,
+        input_files: list[pathlib.Path],
+    ) -> EncodingSettings:
+        """Determine output suffix, codec args, and log message based on input format."""
+        if file_format == ".mp3":
+            return EncodingSettings(
+                output_suffix=".mp3",
+                codec_args=MP3_COPY_PARAMS,
+                log_message="Concatenating MP3 files without re-encoding",
+            )
+
+        if file_format in [".flac", ".wav"]:
+            return EncodingSettings(
+                output_suffix=".m4b",
+                codec_args=M4B_CONVERT_PARAMS,
+                log_message="Converting audio to AAC format",
+            )
+
+        probe = ffmpeg.probe(input_files[0])
+        bitrate = int(probe["streams"][0]["bit_rate"])
+        if bitrate > MAX_BITRATE:
+            return EncodingSettings(
+                output_suffix=".m4b",
+                codec_args=M4B_CONVERT_PARAMS,
+                log_message="Converting audio to AAC format",
+            )
+
+        return EncodingSettings(
+            output_suffix=".m4b",
+            codec_args=M4B_COPY_PARAMS,
+            log_message="Copying audio stream",
+        )
+
+    def _parse_external_chapters(self, chapter_file_path: pathlib.Path) -> ExternalChapters | None:
+        """Parse an external audiobook.chapters.txt file."""
+        if not chapter_file_path.exists():
+            return None
+
+        total_length_ms = 0
+        chapters: list[ChapterInfo] = []
+
+        with chapter_file_path.open() as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if not line:
+                    continue
+
+                if match := TOTAL_LENGTH_PATTERN.match(line):
+                    total_length_ms = _parse_timestamp_to_ms(
+                        match.group(1),
+                        match.group(2),
+                        match.group(3),
+                        match.group(4),
+                    )
+                elif match := TIMESTAMP_PATTERN.match(line):
+                    start_ms = _parse_timestamp_to_ms(
+                        match.group(1),
+                        match.group(2),
+                        match.group(3),
+                        match.group(4),
+                    )
+                    chapters.append(ChapterInfo(start_ms=start_ms, title=match.group(5)))
+
+        if not chapters or total_length_ms == 0:
+            return None
+
+        return ExternalChapters(total_length_ms=total_length_ms, chapters=chapters)
+
+    def _build_chapter_string(
+        self,
+        input_files: list[pathlib.Path],
+        external_chapters: ExternalChapters | None,
+    ) -> tuple[str, int]:
+        """Build FFmpeg chapter metadata string. Returns chapter string and total length in ms."""
+        chapter_str = ";FFMETADATA1\n"
+
+        if external_chapters:
+            total_length_ms = external_chapters.total_length_ms
+            for i, chapter in enumerate(external_chapters.chapters):
+                if i + 1 < len(external_chapters.chapters):
+                    end_ms = external_chapters.chapters[i + 1].start_ms - 1
+                else:
+                    end_ms = total_length_ms
+                chapter_str += (
+                    f"[CHAPTER]\nTIMEBASE=1/1000\nSTART={chapter.start_ms:.0f}\n"
+                    f"END={end_ms:.0f}\ntitle={chapter.title}\n"
+                )
+            loguru.logger.info("Using external chapter file")
+        else:
+            total_length_ms = 0
+            for file in input_files:
+                probe = ffmpeg.probe(file)
+                length = int(float(probe["streams"][0]["duration"]) * 1000)
+                end = total_length_ms + length
+                chapter_str += (
+                    f"[CHAPTER]\nTIMEBASE=1/1000\nSTART={total_length_ms:.0f}\nEND={end:.0f}\ntitle={file.stem}\n"
+                )
+                total_length_ms = end + 1
+            loguru.logger.info("Generating chapters from file names")
+
+        return chapter_str, total_length_ms
+
+    def _get_total_audio_length_ms(self, input_files: list[pathlib.Path]) -> int:
+        """Calculate total length of all audio files in milliseconds."""
+        total_ms = 0
+        for file in input_files:
+            probe = ffmpeg.probe(file)
+            total_ms += int(float(probe["streams"][0]["duration"]) * 1000)
+        return total_ms
+
+    def _build_ffmpeg_args(
+        self,
+        process_file: pathlib.Path,
+        chapter_file: pathlib.Path,
+        output_file_path: pathlib.Path,
+        codec_args: list[str],
+    ) -> list[str]:
+        """Build FFmpeg command arguments."""
+        return [
+            "ffmpeg",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(process_file),
+            "-i",
+            str(chapter_file),
+            "-map",
+            "0:a",
+            "-map",
+            "0:v?",
+            "-map_metadata",
+            "1",
+            *codec_args,
+            str(output_file_path),
+        ]
 
     async def convert(self) -> None:
         input_files_formats = [list(self.input_directory_path.glob(f"*{_format}")) for _format in SUPPORTED_FORMATS]
@@ -36,110 +214,69 @@ class ABSConverter:
             raise ValueError(msg)
 
         input_files = list(itertools.chain.from_iterable(input_files_formats))
-        if any(input_files):
-            input_files = sorted(input_files, key=lambda x: x.stem)
-            output_directory_path = (
-                self.export_directory_path / self.input_directory_path.parent.name / self.input_directory_path.name
-            )
-            output_directory_path.mkdir(parents=True, exist_ok=True)
-            output_file_path = output_directory_path / "audiobook.m4b"
-            process_file = self.input_directory_path / "input"
-            chapter_file = self.input_directory_path / "FFMETADATAFILE"
-            chapter_str = ";FFMETADATA1\n"
-            start = 0
-            for file in input_files:
-                probe = ffmpeg.probe(file)
-                length = int(float(probe["streams"][0]["duration"]) * 1000)
-                end = start + length
-                chapter_str += f"[CHAPTER]\nTIMEBASE=1/1000\nSTART={start:.0f}\nEND={end:.0f}\ntitle={file.stem}\n"
-                start = end + 1
+        if not input_files:
+            return
 
-            loguru.logger.info(chapter_str)
+        input_files = sorted(input_files, key=lambda x: x.stem)
+        output_directory_path = (
+            self.export_directory_path / self.input_directory_path.parent.name / self.input_directory_path.name
+        )
+        output_directory_path.mkdir(parents=True, exist_ok=True)
 
-            with chapter_file.open(mode="w") as chapter_list:
-                chapter_list.write(chapter_str)
+        process_file = self.input_directory_path / "input"
+        chapter_file = self.input_directory_path / "FFMETADATAFILE"
+        external_chapter_file = self.input_directory_path / CHAPTER_FILE_NAME
 
-            with process_file.open(mode="w") as input_list:
-                input_list.write("\n".join(f"file '{file!s}'" for file in input_files))
-
-            _format = input_files[0].suffix
-            if _format in [".flac", ".wav", ".mp3"]:
-                needs_conversion = True
-            else:
-                probe = ffmpeg.probe(input_files[0])
-                bitrate = int(probe["streams"][0]["bit_rate"])
-                needs_conversion = bitrate > MAX_BITRATE
-
-            if needs_conversion:
-                loguru.logger.info(
-                    "Converting audio to AAC format to file {output_file_path}",
-                    output_file_path=output_file_path,
+        # Check for external chapter file and validate length
+        external_chapters = self._parse_external_chapters(external_chapter_file)
+        if external_chapters:
+            total_audio_length_ms = self._get_total_audio_length_ms(input_files)
+            length_diff = abs(external_chapters.total_length_ms - total_audio_length_ms)
+            if length_diff > CHAPTER_LENGTH_TOLERANCE_MS:
+                loguru.logger.warning(
+                    "External chapter file length ({external_length}ms) doesn't match audio length "
+                    "({audio_length}ms), difference: {diff}ms. Using file-based chapters instead.",
+                    external_length=external_chapters.total_length_ms,
+                    audio_length=total_audio_length_ms,
+                    diff=length_diff,
                 )
-                args = [
-                    "ffmpeg",
-                    "-f",
-                    "concat",
-                    "-safe",
-                    "0",
-                    "-i",
-                    str(process_file),
-                    "-i",
-                    str(chapter_file),
-                    "-map",
-                    "0:a",
-                    "-map",
-                    "0:v?",
-                    "-map_metadata",
-                    "1",
-                    "-c:a",
-                    "libfdk_aac",
-                    "-vbr",
-                    "5",
-                    "-c:v",
-                    "copy",
-                    "-disposition:v",
-                    "attached_pic",
-                    str(output_file_path),
-                ]
+                external_chapters = None
 
-            else:
-                args = [
-                    "ffmpeg",
-                    "-f",
-                    "concat",
-                    "-safe",
-                    "0",
-                    "-i",
-                    str(process_file),
-                    "-i",
-                    str(chapter_file),
-                    "-map",
-                    "0:a",
-                    "-map",
-                    "0:v?",
-                    "-map_metadata",
-                    "1",
-                    "-c:a",
-                    "copy",
-                    "-c:v",
-                    "copy",
-                    "-disposition:v",
-                    "attached_pic",
-                    str(output_file_path),
-                ]
+        chapter_str, _ = self._build_chapter_string(input_files, external_chapters)
 
-            process = await asyncio.create_subprocess_exec(
-                *args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await process.communicate()
-            if stdout:
-                loguru.logger.info(stdout.decode())
+        loguru.logger.info(chapter_str)
 
-            if stderr:
-                loguru.logger.info(stderr.decode())
+        with chapter_file.open(mode="w") as chapter_list:
+            chapter_list.write(chapter_str)
 
-            for file in self.input_directory_path.iterdir():
-                if file.is_file():
-                    file.unlink()
+        with process_file.open(mode="w") as input_list:
+            input_list.write("\n".join(f"file '{file!s}'" for file in input_files))
+
+        file_format = input_files[0].suffix
+        settings = self._get_encoding_settings(file_format, input_files)
+        output_file_path = (output_directory_path / "audiobook").with_suffix(settings.output_suffix)
+
+        loguru.logger.info(f"{settings.log_message} to file {{output_file_path}}", output_file_path=output_file_path)
+
+        args = self._build_ffmpeg_args(
+            process_file,
+            chapter_file,
+            output_file_path,
+            settings.codec_args,
+        )
+
+        process = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        if stdout:
+            loguru.logger.info(stdout.decode())
+
+        if stderr:
+            loguru.logger.info(stderr.decode())
+
+        for file in self.input_directory_path.iterdir():
+            if file.is_file():
+                file.unlink()

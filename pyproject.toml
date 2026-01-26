@@ -4,9 +4,10 @@
   ]
   dependencies = [
     "attrs>=24.2.0",
-    "loguru>=0.7.2",
     "ffmpeg-python>=0.2.0",
-]
+    "ipykernel>=7.1.0",
+    "loguru>=0.7.2",
+  ]
   description = ""
   dynamic = ["classifiers"]
   license = { text = "MIT" }
@@ -66,7 +67,15 @@
     select = ["ALL"]
 
     [tool.ruff.lint.extend-per-file-ignores]
-      "tests/*" = ["ANN001", "ANN201", "INP001", "PLR0913", "S101"]
+      "tests/*" = [
+        "ANN001",
+        "ANN201",
+        "INP001",
+        "PLR0913",
+        "PLR2004",
+        "S101",
+        "SLF001",
+      ]
 
     [tool.ruff.lint.flake8-import-conventions.extend-aliases]
       "collections.abc"  = "cabc"
@@ -77,17 +86,17 @@
       "shapely.geometry" = "shg"
       "typing"           = "t"
 
-[tool.ruff.lint.flake8-type-checking]
-  runtime-evaluated-decorators = ["attrs.define"]
+    [tool.ruff.lint.flake8-type-checking]
+      runtime-evaluated-decorators = ["attrs.define"]
 
-[tool.ruff.lint.isort]
-  force-single-line = true
+    [tool.ruff.lint.isort]
+      force-single-line = true
 
-[tool.ruff.lint.pydocstyle]
-  convention = "pep257"
+    [tool.ruff.lint.pydocstyle]
+      convention = "pep257"
 
-[tool.ruff.lint.pep8-naming]
-  classmethod-decorators = ["classmethod", "pydantic.field_validator"]
+    [tool.ruff.lint.pep8-naming]
+      classmethod-decorators = ["classmethod", "pydantic.field_validator"]
 
 [tool.commitizen]
   name = "cz_conventional_commits"
@@ -124,3 +133,8 @@
 
 [tool.pyright]
   exclude = ["**/__pycache__"]
+
+[dependency-groups]
+  dev = [
+    "pytest>=9.0.2",
+  ]
