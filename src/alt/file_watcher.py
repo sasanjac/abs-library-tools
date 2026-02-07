@@ -32,6 +32,9 @@ class DirectorySnapshot:
 
         return NotImplemented
 
+    def __hash__(self) -> int:
+        return hash(frozenset(self.size_mapping.items()))
+
 
 @attrs.define(auto_attribs=True, kw_only=True, slots=False)
 class FileWatcher:
@@ -61,7 +64,7 @@ class FileWatcher:
     async def watch_artist_dir(self, directory: pathlib.Path) -> None:
         snapshot = DirectorySnapshot(directory_path=directory)
         await self._watch_artist_dir(snapshot.subdirectories)
-        while any(directory.iterdir()):
+        while any(directory.iterdir()):  # noqa: ASYNC240
             await asyncio.sleep(SLEEP_TIME)
             snapshot_new = DirectorySnapshot(directory_path=directory)
             subdirectories = [
@@ -72,7 +75,8 @@ class FileWatcher:
             await self._watch_artist_dir(subdirectories)
             snapshot = snapshot_new
 
-        directory.rmdir()
+        directory.rmdir()  # noqa: ASYNC240
+        logger.info(f"Removed {directory!s}")
 
     async def _watch_artist_dir(self, subdirectories: cabc.Sequence[pathlib.Path]) -> None:
         async with asyncio.TaskGroup() as tg:
@@ -104,5 +108,5 @@ class FileWatcher:
         await absc.convert()
         logger.info(f"Conversion finished for {directory!s}. Removing directory...")
 
-        directory.rmdir()
+        directory.rmdir()  # noqa: ASYNC240
         logger.info(f"Removed {directory!s}")
