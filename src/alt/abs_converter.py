@@ -7,13 +7,13 @@ import asyncio
 import itertools
 import pathlib
 import re
+import typing as t
 
 import attrs
 import ffmpeg
 import loguru
 
 MAX_BITRATE = 192000
-EXPECTED_STREAM_COUNT = 2
 CHAPTER_LENGTH_TOLERANCE_MS = 5000
 
 M4B_COPY_PARAMS = ["-c:a", "copy", "-c:v", "copy", "-disposition:v", "attached_pic"]
@@ -41,6 +41,32 @@ def _parse_timestamp_to_ms(hours: str, minutes: str, seconds: str, fraction: str
         ms += int(fraction.ljust(3, "0")[:3])
 
     return ms
+
+
+def _natural_sort_key(path: pathlib.Path) -> list[object]:
+    """Return a key that sorts embedded numbers numerically (e.g. Chapter 2 before Chapter 10)."""
+    return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", path.stem)]
+
+
+def _escape_concat_path(path: pathlib.Path) -> str:
+    """Escape a path for use in an FFmpeg concat demuxer list."""
+    return str(path).replace("'", "'\\''")
+
+
+def _select_audio_stream(probe: dict[str, t.Any]) -> dict[str, t.Any]:
+    """Return the first audio stream from an ffmpeg probe, falling back to the first stream."""
+    for stream in probe.get("streams", []):
+        if stream.get("codec_type") == "audio":
+            return stream
+
+    return probe["streams"][0]
+
+
+def _probe_duration_ms(probe: dict[str, t.Any]) -> int:
+    """Extract the audio duration in milliseconds from an ffmpeg probe."""
+    stream = _select_audio_stream(probe)
+    duration = stream.get("duration") or probe.get("format", {}).get("duration")
+    return int(float(duration) * 1000)
 
 
 @attrs.define(auto_attribs=True, kw_only=True, slots=False)
@@ -71,6 +97,7 @@ class ABSConverter:
         self,
         file_format: str,
         input_files: list[pathlib.Path],
+        first_probe: dict[str, t.Any] | None = None,
     ) -> EncodingSettings:
         """Determine output suffix, codec args, and log message based on input format."""
         if file_format == ".mp3":
@@ -87,8 +114,10 @@ class ABSConverter:
                 log_message="Converting audio to AAC format",
             )
 
-        probe = ffmpeg.probe(input_files[0])
-        bitrate = int(probe["streams"][0]["bit_rate"])
+        probe = first_probe if first_probe is not None else ffmpeg.probe(input_files[0])
+        stream = _select_audio_stream(probe)
+        bitrate_raw = stream.get("bit_rate") or probe.get("format", {}).get("bit_rate")
+        bitrate = int(bitrate_raw)
         if bitrate > MAX_BITRATE:
             return EncodingSettings(
                 output_suffix=".m4b",
@@ -141,6 +170,7 @@ class ABSConverter:
         self,
         input_files: list[pathlib.Path],
         external_chapters: ExternalChapters | None,
+        durations: dict[pathlib.Path, int] | None = None,
     ) -> tuple[str, int]:
         """Build FFmpeg chapter metadata string. Returns chapter string and total length in ms."""
         chapter_str = ";FFMETADATA1\n"
@@ -158,10 +188,10 @@ class ABSConverter:
                 )
             loguru.logger.info("Using external chapter file")
         else:
+            durations = durations or {}
             total_length_ms = 0
             for file in input_files:
-                probe = ffmpeg.probe(file)
-                length = int(float(probe["streams"][0]["duration"]) * 1000)
+                length = durations[file]
                 end = total_length_ms + length
                 chapter_str += (
                     f"[CHAPTER]\nTIMEBASE=1/1000\nSTART={total_length_ms:.0f}\nEND={end:.0f}\ntitle={file.stem}\n"
@@ -171,13 +201,9 @@ class ABSConverter:
 
         return chapter_str, total_length_ms
 
-    def _get_total_audio_length_ms(self, input_files: list[pathlib.Path]) -> int:
-        """Calculate total length of all audio files in milliseconds."""
-        total_ms = 0
-        for file in input_files:
-            probe = ffmpeg.probe(file)
-            total_ms += int(float(probe["streams"][0]["duration"]) * 1000)
-        return total_ms
+    async def _probe(self, file: pathlib.Path) -> dict[str, t.Any]:
+        """Probe a file without blocking the event loop."""
+        return await asyncio.to_thread(ffmpeg.probe, str(file))
 
     def _build_ffmpeg_args(
         self,
@@ -217,7 +243,7 @@ class ABSConverter:
         if not input_files:
             return
 
-        input_files = sorted(input_files, key=lambda x: x.stem)
+        input_files = sorted(input_files, key=_natural_sort_key)
         output_directory_path = (
             self.export_directory_path / self.input_directory_path.parent.name / self.input_directory_path.name
         )
@@ -227,10 +253,13 @@ class ABSConverter:
         chapter_file = self.input_directory_path / "FFMETADATAFILE"
         external_chapter_file = self.input_directory_path / CHAPTER_FILE_NAME
 
+        probes = {file: await self._probe(file) for file in input_files}
+        durations = {file: _probe_duration_ms(probes[file]) for file in input_files}
+
         # Check for external chapter file and validate length
         external_chapters = self._parse_external_chapters(external_chapter_file)
         if external_chapters:
-            total_audio_length_ms = self._get_total_audio_length_ms(input_files)
+            total_audio_length_ms = sum(durations.values())
             length_diff = abs(external_chapters.total_length_ms - total_audio_length_ms)
             if length_diff > CHAPTER_LENGTH_TOLERANCE_MS:
                 loguru.logger.warning(
@@ -242,7 +271,7 @@ class ABSConverter:
                 )
                 external_chapters = None
 
-        chapter_str, _ = self._build_chapter_string(input_files, external_chapters)
+        chapter_str, _ = self._build_chapter_string(input_files, external_chapters, durations)
 
         loguru.logger.info(chapter_str)
 
@@ -250,11 +279,13 @@ class ABSConverter:
             chapter_list.write(chapter_str)
 
         with process_file.open(mode="w") as input_list:
-            input_list.write("\n".join(f"file '{file!s}'" for file in input_files))
+            input_list.write("\n".join(f"file '{_escape_concat_path(file)}'" for file in input_files))
 
         file_format = input_files[0].suffix
-        settings = self._get_encoding_settings(file_format, input_files)
+        settings = self._get_encoding_settings(file_format, input_files, probes[input_files[0]])
         output_file_path = (output_directory_path / "audiobook").with_suffix(settings.output_suffix)
+
+        codec_args = settings.codec_args
 
         loguru.logger.info(f"{settings.log_message} to file {{output_file_path}}", output_file_path=output_file_path)
 
@@ -262,7 +293,7 @@ class ABSConverter:
             process_file,
             chapter_file,
             output_file_path,
-            settings.codec_args,
+            codec_args,
         )
 
         process = await asyncio.create_subprocess_exec(
@@ -276,6 +307,14 @@ class ABSConverter:
 
         if stderr:
             loguru.logger.info(stderr.decode())
+
+        if process.returncode != 0:
+            loguru.logger.error(
+                "FFmpeg failed with exit code {code} for {directory}. Keeping source files.",
+                code=process.returncode,
+                directory=str(self.input_directory_path),
+            )
+            return
 
         for file in self.input_directory_path.iterdir():
             if file.is_file():
