@@ -1,0 +1,26 @@
+# git / vcs
+.git
+.gitignore
+
+# python caches
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# tests & notebooks (not needed in the image)
+tests/
+*.ipynb
+
+# local tooling & editor
+.vscode/
+.idea/
+.DS_Store
+
+# ci / docs
+.github/
