@@ -14,8 +14,6 @@ COPY --from=ghcr.io/astral-sh/uv:0.9.7 /uv /usr/local/bin/uv
 
 # build ffmpeg (with non-free libfdk-aac) and install its runtime dependencies
 RUN \
-	echo "**** enable edge/testing for fdk-aac-dev ****" && \
-	echo "http://dl-cdn.alpinelinux.org/alpine/edge/testing" >> /etc/apk/repositories && \
 	echo "**** install build packages ****" && \
 	apk add --no-cache --virtual=build-dependencies \
 		binutils \
@@ -27,6 +25,7 @@ RUN \
 		g++ \
 		gcc \
 		jpeg-dev \
+		lame-dev \
 		libass-dev \
 		libc-dev \
 		libgcc \
@@ -35,6 +34,7 @@ RUN \
 		libtheora-dev \
 		libvorbis-dev \
 		libvpx-dev \
+		libwebp-dev \
 		make \
 		musl-dev \
 		nasm \
