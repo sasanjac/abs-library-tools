@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import itertools
 import pathlib
 import re
+import shutil
+import subprocess
 import typing as t
 
 import attrs
@@ -16,8 +19,31 @@ import loguru
 MAX_BITRATE = 192000
 CHAPTER_LENGTH_TOLERANCE_MS = 5000
 
-M4B_COPY_PARAMS = ["-c:a", "copy", "-c:v", "copy", "-disposition:v", "attached_pic"]
-M4B_CONVERT_PARAMS = ["-c:a", "libfdk_aac", "-vbr", "5", "-c:v", "copy", "-disposition:v", "attached_pic"]
+M4B_COPY_PARAMS = ["-c:a", "copy", "-c:v", "copy", "-disposition:v", "attached_pic", "-movflags", "+faststart"]
+M4B_CONVERT_PARAMS = [
+    "-c:a",
+    "libfdk_aac",
+    "-vbr",
+    "5",
+    "-c:v",
+    "copy",
+    "-disposition:v",
+    "attached_pic",
+    "-movflags",
+    "+faststart",
+]
+NATIVE_AAC_CONVERT_PARAMS = [
+    "-c:a",
+    "aac",
+    "-q:a",
+    "2",
+    "-c:v",
+    "copy",
+    "-disposition:v",
+    "attached_pic",
+    "-movflags",
+    "+faststart",
+]
 MP3_COPY_PARAMS = ["-c:a", "copy", "-c:v", "copy", "-id3v2_version", "3"]
 
 SUPPORTED_FORMATS = [
@@ -67,6 +93,25 @@ def _probe_duration_ms(probe: dict[str, t.Any]) -> int:
     stream = _select_audio_stream(probe)
     duration = stream.get("duration") or probe.get("format", {}).get("duration")
     return int(float(duration) * 1000)
+
+
+@functools.cache
+def _libfdk_available() -> bool:
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path is None:
+        return True
+
+    try:
+        result = subprocess.run(  # noqa: S603 # fixed argument list, no shell, path resolved via shutil.which
+            [ffmpeg_path, "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return True
+
+    return "libfdk_aac" in result.stdout
 
 
 @attrs.define(auto_attribs=True, kw_only=True, slots=False)
@@ -286,6 +331,9 @@ class ABSConverter:
         output_file_path = (output_directory_path / "audiobook").with_suffix(settings.output_suffix)
 
         codec_args = settings.codec_args
+        if "libfdk_aac" in codec_args and not _libfdk_available():
+            loguru.logger.warning("libfdk_aac not available; falling back to native aac encoder")
+            codec_args = NATIVE_AAC_CONVERT_PARAMS
 
         loguru.logger.info(f"{settings.log_message} to file {{output_file_path}}", output_file_path=output_file_path)
 
