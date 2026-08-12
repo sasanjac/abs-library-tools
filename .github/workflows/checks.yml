@@ -1,44 +1,50 @@
 ---
-  name: checks
+name: checks
 
-  on:
-    push:
-      branches:
-        - main
-    pull_request:
-      branches:
-        - main
-    workflow_call:
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_call:
 
-  jobs:
-    checks:
-      name: Running checks
-      runs-on: ubuntu-latest
-      strategy:
-        matrix:
-          python-version: ["3.11"]
+permissions:
+  contents: read
 
-      steps:
-        - name: Checking out repository
-          uses: actions/checkout@v4.1.7
-          with:
-            fetch-depth: 1
+jobs:
+  checks:
+    name: Running checks
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
 
-        - name: Set up rye
-          uses: eifinger/setup-rye@v4.2.1
-          id: setup-rye
+    steps:
+      - name: Checking out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-        - name: Pin python-version @ ${{ matrix.python-version }}
-          run: rye pin ${{ matrix.python-version }}
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
 
-        - name: Install dependencies
-          run: rye sync
+      - name: Install dependencies
+        run: uv sync --frozen
 
-        - name: Check code
-          run: rye run ruff check .
+      - name: Check code
+        run: uv run ruff check .
 
-        - name: Check code format
-          run: rye run ruff format --check .
+      - name: Check code format
+        run: uv run ruff format --check .
 
-        - name: Type check using mypy
-          run: rye run mypy .
+      - name: Type check using mypy
+        run: uv run mypy .
+
+      - name: Run tests
+        run: uv run pytest
