@@ -56,6 +56,10 @@
     select = ["ALL"]
 
     [tool.ruff.lint.extend-per-file-ignores]
+      "scripts/*" = [
+        "S603",
+        "T201",
+      ]
       "tests/*" = [
         "ANN001",
         "ANN201",
