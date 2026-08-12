@@ -5,15 +5,15 @@
   dependencies = [
     "attrs>=24.2.0",
     "ffmpeg-python>=0.2.0",
-    "ipykernel>=7.1.0",
     "loguru>=0.7.2",
   ]
-  description = ""
+  description = "Converts audio files into chaptered .m4b audiobooks for Audiobookshelf"
   dynamic = ["classifiers"]
   license = { text = "MIT" }
   name = "abs-library-tools"
+  readme = "README.md"
   requires-python = ">=3.11"
-  version = "0.1.0"
+  version = "2.3.0"
 
   [project.urls]
     homepage = "https://github.com/sasanjac/abs-library-tools"
@@ -22,18 +22,6 @@
   build-backend = "hatchling.build"
   requires      = ["hatchling"]
 
-[tool.rye]
-  dev-dependencies = [
-    "commitizen>=3.28.0",
-    "ipykernel>=6.29.5",
-    "mypy>=1.11.0",
-    "pytest-cov>=5.0.0",
-    "pytest-xdist>=3.6.1",
-    "pytest>=8.3.1",
-    "ruff>=0.5.5",
-  ]
-  managed = true
-
 [tool.hatch.metadata]
   allow-direct-references = true
 
@@ -41,15 +29,16 @@
   packages = ["src/alt"]
 
 [tool.ruff]
-  line-length = 120
+  extend-exclude = ["*.ipynb"]
+  line-length    = 120
 
   [tool.ruff.lint]
     ignore = [
       "ANN002",
       "ANN003",
-      "ANN101",
-      "ANN102",
       "C901",
+      "COM812",
+      "CPY001",
       "D100",
       "D101",
       "D102",
@@ -99,12 +88,9 @@
       classmethod-decorators = ["classmethod", "pydantic.field_validator"]
 
 [tool.commitizen]
-  name = "cz_conventional_commits"
-  tag_format = "$version"
-  version = "2.3.0"
-  version_files = [
-    "pyproject.toml:version",
-  ]
+  name             = "cz_conventional_commits"
+  tag_format       = "v$version"
+  version_provider = "pep621"
 
 [tool.mypy]
   follow_imports         = "normal"
@@ -136,5 +122,11 @@
 
 [dependency-groups]
   dev = [
+    "commitizen>=3.28.0",
+    "ipykernel>=7.1.0",
+    "mypy>=1.11.0",
+    "pytest-cov>=5.0.0",
+    "pytest-xdist>=3.6.1",
     "pytest>=9.0.2",
+    "ruff>=0.5.5",
   ]
